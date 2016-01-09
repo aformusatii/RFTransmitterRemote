@@ -64,7 +64,7 @@ uint8_t transfer_spi(uint8_t tx_)
 /* ======================================================= */
 void __start_timer()
 {
-	startTime = getCurrentTimeCicles();
+	startTime = getCurrentTimeCycles();
 }
 
 /* ======================================================= */

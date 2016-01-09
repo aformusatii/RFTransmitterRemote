@@ -14,5 +14,5 @@ Function Prototypes
 void initTimer();
 void incrementOvf();
 uint64_t convertSecondsToCicles(uint16_t value);
-uint64_t getCurrentTimeCicles();
+uint64_t getCurrentTimeCycles();
 uint32_t getElapsedMilliseconds(uint64_t startTime);

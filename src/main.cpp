@@ -22,7 +22,8 @@ extern "C" {
 /********************************************************************************
 	Macros and Defines
 ********************************************************************************/
-
+#define DEBUG_ARRAY_SIZE 1
+#define SKIP_REPEATED_IR 3
 
 /********************************************************************************
 	Function Prototypes
@@ -36,18 +37,25 @@ void processIRCommand(uint64_t cmd);
 	Global Variables
 ********************************************************************************/
 volatile uint16_t ir_index = 0;
-volatile uint16_t ir_data_debug[255];
+volatile uint16_t ir_data_debug[DEBUG_ARRAY_SIZE];
 
-// last negative and positive start pulse time cicles
+// last negative and positive start pulse time cycles
 volatile uint64_t lpp = 0;
 volatile uint64_t lnp = 0;
-// last negative and positive pulse time cicles duration
+
+// last negative and positive pulse time cycles duration
 volatile uint16_t tlpp = 0;
 volatile uint16_t tlnp = 0;
+
+// when last IR command was received
+volatile uint64_t lcr = 0;
 
 // IR command decoded
 volatile uint64_t ir_cmd = 0;
 volatile uint16_t ir_cmd_index = 0;
+
+// Repeated IR commands are too quick we need to skip some of them
+volatile uint8_t skip_repeted_ir_count = 0;
 
 volatile uint64_t sleep_watch = 0;
 
@@ -76,16 +84,18 @@ ISR(INT0_vect)
     // Keep the processor awake until we receive the entire IR command
     awake = true;
 
+    uint64_t ctc = getCurrentTimeCycles();
+
     if (GET_REG1_FLAG(PIND, PD2)) {
         // PD2 is high, very high...
-        tlnp = getCurrentTimeCicles() - lnp;
-        lpp = getCurrentTimeCicles();
+        tlnp = ctc - lnp;
+        lpp = ctc;
     } else {
         // PD2 is low
-        tlpp = getCurrentTimeCicles() - lpp;
-        lnp = getCurrentTimeCicles();
+        tlpp = ctc - lpp;
+        lnp = ctc;
 
-        /* if (ir_index < 255) {
+        /* if (ir_index < DEBUG_ARRAY_SIZE) {
             ir_data_debug[ir_index++] = tlnp;
             ir_data_debug[ir_index++] = tlpp;
         }*/
@@ -164,9 +174,10 @@ int main(void) {
     radio.printDetails();
 
     // Init timer variables
-    lpp = getCurrentTimeCicles();
-    lnp = getCurrentTimeCicles();
-    sleep_watch = getCurrentTimeCicles();
+    lpp = getCurrentTimeCycles();
+    lnp = lpp;
+    sleep_watch = lpp;
+    lcr = lpp;
 
 	// main loop
     while (1) {
@@ -175,7 +186,7 @@ int main(void) {
 
     	// Process the IR command if it was received
     	if (ir_preamble_detected && (ir_cmd_index > 30)) {
-    	    int16_t positivePulseDuration = getCurrentTimeCicles() - lpp;
+    	    int16_t positivePulseDuration = getCurrentTimeCycles() - lpp;
 
     	    // Check if positive pulse is long enough then the last bit was received
     	    if (positivePulseDuration > 40) {
@@ -193,12 +204,12 @@ int main(void) {
     	    }
 
             // keep the device awake meanwhile but allow to go to sleep after a command is received
-            sleep_watch = getCurrentTimeCicles();
+            sleep_watch = getCurrentTimeCycles();
             awake = false;
     	}
 
     	// Can we sleep? we are hungry when awake...
-    	if (!awake && (getCurrentTimeCicles() - sleep_watch) > 1000) {
+    	if (!awake && (getCurrentTimeCycles() - sleep_watch) > 1000) {
     	    // Power down the RF module
     	    powerDownRF();
     	    _delay_ms(10);
@@ -269,12 +280,28 @@ void processIRCommand(uint64_t cmd) {
         }
     }
 
-    printf("\n[%d]", mapped_cmd);
-
     if (mapped_cmd != 0) {
+        int32_t whenLastCommandReceived = getCurrentTimeCycles() - lcr;
+        lcr = getCurrentTimeCycles();
+
+        if (whenLastCommandReceived < 1000) { // if it is ~840 this is a repeated IR command check if we need to skip it
+            if (skip_repeted_ir_count < (SKIP_REPEATED_IR - 1)) { // skip first n IR repeated commands
+                skip_repeted_ir_count++;
+                return;
+            }
+        } else {
+            skip_repeted_ir_count = 0;
+        }
+
+        printf("\n[%d]", mapped_cmd);
+
+        lcr = getCurrentTimeCycles();
+
         // Send data via RF module
         uint8_t data[] = {mapped_cmd};
         radio.write(data, 1);
+    } else {
+        printf("\nUnknown mapping");
     }
 }
 
@@ -285,8 +312,8 @@ void handle_usart_cmd(char *cmd, char *args) {
 
 	if (strcmp(cmd, "reset") == 0) {
 	    ir_index = 0;
-	    lpp = getCurrentTimeCicles();
-	    lnp = getCurrentTimeCicles();
+	    lpp = getCurrentTimeCycles();
+	    lnp = lpp;
 	}
 
 	if (strcmp(cmd, "show") == 0) {
